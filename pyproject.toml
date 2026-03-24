@@ -1,0 +1,27 @@
+[project]
+name = "megabird_pass"
+version = "0.2.0"
+description = "KDBX password viewer TUI"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "appdirs>=1.4.4",
+    "cryptography>=46.0.5",
+    "pykeepass>=4.1.1.post1",
+    "textual>=0.80.0",
+]
+
+[project.scripts]
+megabird-pass = "megabird_pass.main:main"
+megabird-db = "megabird_pass.db:main"
+
+[tool.setuptools.package-data]
+megabird_pass = ["database.kdbx"]
+
+[tool.setuptools.packages.find]
+include = ["megabird_pass"]
+exclude = []
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
