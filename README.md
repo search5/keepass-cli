@@ -112,4 +112,4 @@ kpassh/
 
 ## License
 
-Internal use only.
+BSD 3-Clause License. See [LICENSE](LICENSE) for details.
