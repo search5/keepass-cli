@@ -1,7 +1,7 @@
 [project]
 name = "kpassh"
 version = "0.2.0"
-description = "KDBX password viewer TUI"
+description = "Terminal TUI for browsing KeePass databases and managing SSH keys"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.9"
