@@ -7,8 +7,6 @@ import hashlib
 import os
 import socket
 import struct
-import subprocess
-import tempfile
 
 from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519
 from cryptography.hazmat.primitives.serialization import (
@@ -156,11 +154,15 @@ def is_ssh_private_key(key_data: bytes) -> bool:
 def _load_private_key(key_data: bytes, passphrase: str | None = None):
     """PEM 또는 OpenSSH 형식의 개인키를 로드. 키 객체를 반환."""
     pw = passphrase.encode() if passphrase else None
-    try:
+    # OpenSSH 형식은 load_pem_private_key가 인식 못하므로 전용 함수만 사용
+    if key_data.lstrip()[:35].startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----"):
         return load_ssh_private_key(key_data, password=pw)
+    # 전통적인 PEM 형식 (RSA/EC/DSA/PKCS8)
+    try:
+        return load_pem_private_key(key_data, password=pw)
     except Exception:
         pass
-    return load_pem_private_key(key_data, password=pw)
+    return load_ssh_private_key(key_data, password=pw)
 
 
 def _build_add_identity_payload(private_key, comment: str = "") -> bytes:
@@ -250,27 +252,134 @@ def agent_add_key(key_data: bytes, passphrase: str | None = None,
     return False, "Agent가 키 추가를 거부했습니다"
 
 
+# ── OpenSSH 키 Comment 추출 ────────────────────────────────────────────────
+
+def _rd(buf: bytes, off: int) -> tuple[bytes, int]:
+    """SSH string 타입 읽기."""
+    n = struct.unpack(">I", buf[off:off + 4])[0]
+    return buf[off + 4:off + 4 + n], off + 4 + n
+
+
+def _parse_openssh_priv_comment(priv_data: bytes) -> str | None:
+    """복호화된 OpenSSH 개인키 섹션에서 comment를 파싱."""
+    try:
+        check1 = struct.unpack(">I", priv_data[:4])[0]
+        check2 = struct.unpack(">I", priv_data[4:8])[0]
+        if check1 != check2:
+            return None  # 복호화 실패 또는 잘못된 passphrase
+        off = 8
+        key_type_b, off = _rd(priv_data, off)
+        key_type = key_type_b.decode()
+        if key_type == "ssh-ed25519":
+            _, off = _rd(priv_data, off)   # pubkey
+            _, off = _rd(priv_data, off)   # privkey (64 bytes)
+        elif key_type == "ssh-rsa":
+            for _ in range(6):             # n, e, d, iqmp, p, q
+                _, off = _rd(priv_data, off)
+        elif key_type.startswith("ecdsa-sha2-"):
+            _, off = _rd(priv_data, off)   # curve name
+            _, off = _rd(priv_data, off)   # pubkey
+            _, off = _rd(priv_data, off)   # private value
+        else:
+            return None
+        comment_b, _ = _rd(priv_data, off)
+        s = comment_b.decode(errors="replace")
+        return s or None
+    except Exception:
+        return None
+
+
+def _bcrypt_decrypt_openssh(cipher: str, kdf_opts: bytes,
+                             password: bytes, data: bytes) -> bytes | None:
+    """bcrypt KDF로 암호화된 OpenSSH 개인키 블록을 복호화."""
+    try:
+        import bcrypt as _bcrypt
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+        salt_len = struct.unpack(">I", kdf_opts[:4])[0]
+        salt = kdf_opts[4:4 + salt_len]
+        rounds = struct.unpack(">I", kdf_opts[4 + salt_len:8 + salt_len])[0]
+
+        if cipher in ("aes256-ctr", "aes256-cbc"):
+            key_iv = _bcrypt.kdf(password, salt, 48, rounds, ignore_few_rounds=True)
+            key, iv = key_iv[:32], key_iv[32:]
+            mode = modes.CTR(iv) if cipher == "aes256-ctr" else modes.CBC(iv)
+            dec = Cipher(algorithms.AES(key), mode).decryptor()
+            return dec.update(data) + dec.finalize()
+
+        if cipher == "chacha20-poly1305@openssh.com":
+            # key[0:32] = 데이터 암호화 키(k2), key[32:64] = 헤더/poly1305 키(k1)
+            key_material = _bcrypt.kdf(password, salt, 64, rounds, ignore_few_rounds=True)
+            k2 = key_material[:32]
+            ciphertext = data[:-16]  # 마지막 16 bytes = poly1305 tag 제거
+            # IETF ChaCha20: 4-byte counter(LE) + 12-byte nonce
+            # 데이터 암호화는 block counter=1, seqnr(nonce)=0
+            nonce = b"\x01\x00\x00\x00" + b"\x00" * 12
+            dec = Cipher(algorithms.ChaCha20(k2, nonce), mode=None).decryptor()
+            return dec.update(ciphertext) + dec.finalize()
+
+        return None
+    except Exception:
+        return None
+
+
+def get_key_comment(key_data: bytes, passphrase: str | None = None) -> str | None:
+    """OpenSSH 개인키 파일에서 comment를 추출."""
+    try:
+        stripped = key_data.strip()
+        if not stripped.startswith(b"-----BEGIN OPENSSH PRIVATE KEY-----"):
+            return None
+
+        lines = stripped.decode().splitlines()
+        b64 = "".join(l for l in lines if not l.startswith("-----"))
+        raw = base64.b64decode(b64)
+
+        magic = b"openssh-key-v1\x00"
+        if not raw.startswith(magic):
+            return None
+
+        off = len(magic)
+        cipher_b, off = _rd(raw, off)
+        kdf_b, off = _rd(raw, off)
+        kdf_opts_b, off = _rd(raw, off)
+        nkeys = struct.unpack(">I", raw[off:off + 4])[0]
+        off += 4
+
+        for _ in range(nkeys):
+            _, off = _rd(raw, off)
+
+        priv_blob, _ = _rd(raw, off)
+
+        cipher = cipher_b.decode()
+        kdf = kdf_b.decode()
+
+        if cipher == "none":
+            priv_data = priv_blob
+        elif kdf == "bcrypt" and passphrase is not None:
+            priv_data = _bcrypt_decrypt_openssh(
+                cipher, kdf_opts_b, passphrase.encode(), priv_blob,
+            )
+            if priv_data is None:
+                return None
+        else:
+            return None
+
+        return _parse_openssh_priv_comment(priv_data)
+    except Exception:
+        return None
+
+
 # ── Fingerprint ───────────────────────────────────────────────────────────
 
-def get_key_fingerprint(key_data: bytes) -> str | None:
-    """PEM 개인키 데이터의 SHA256 fingerprint를 반환."""
+def get_key_fingerprint(key_data: bytes, passphrase: str | None = None) -> str | None:
+    """개인키 데이터의 SHA256 fingerprint를 반환."""
     try:
-        with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as tmp:
-            tmp.write(key_data)
-            tmp_path = tmp.name
-        result = subprocess.run(
-            ["ssh-keygen", "-lf", tmp_path],
-            capture_output=True, text=True, timeout=5,
+        private_key = _load_private_key(key_data, passphrase=passphrase)
+        pub_bytes = private_key.public_key().public_bytes(
+            Encoding.OpenSSH, PublicFormat.OpenSSH,
         )
-        os.unlink(tmp_path)
-        if result.returncode != 0:
-            return None
-        parts = result.stdout.strip().split()
-        if len(parts) >= 2 and parts[1].startswith("SHA256:"):
-            return parts[1]
+        # "ssh-type AAAA..." 형식에서 blob(두 번째 토큰) 추출
+        blob = base64.b64decode(pub_bytes.split()[1])
+        return _blob_fingerprint(blob)
     except Exception:
-        try:
-            os.unlink(tmp_path)
-        except Exception:
-            pass
-    return None
+        return None

@@ -1,6 +1,6 @@
 """
-KDBX 파일 뷰어 — Textual TUI
-사용법: python viewer.py [kdbx_path]
+KDBX file viewer — Textual TUI
+Usage: python viewer.py [kdbx_path]
 """
 
 from __future__ import annotations
@@ -28,39 +28,44 @@ from textual.widgets import (
     TabPane,
 )
 
-from megabird_pass.ssh_agent import (
+from keepass_cli.i18n import _
+from keepass_cli.ssh_agent import (
     agent_add_key,
     agent_remove_key,
     get_agent_key_map,
+    get_key_comment,
     get_key_fingerprint,
     is_ssh_private_key,
 )
 
 
 def copy_to_clipboard(text: str) -> None:
-    """시스템 클립보드에 텍스트를 복사한다 (macOS/Linux/Windows)."""
-    try:
-        subprocess.run(
-            ["pbcopy"], input=text.encode(), check=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except FileNotFoundError:
+    """Copy text to system clipboard (macOS/Linux/Windows)."""
+    candidates = [
+        ["pbcopy"],
+        ["wl-copy"],
+        ["xclip", "-selection", "clipboard"],
+        ["xsel", "--clipboard", "--input"],
+        ["clip"],
+    ]
+    for cmd in candidates:
+        if shutil.which(cmd[0]) is None:
+            continue
         try:
             subprocess.run(
-                ["xclip", "-selection", "clipboard"], input=text.encode(), check=True,
+                cmd, input=text.encode(), check=True,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-        except FileNotFoundError:
-            subprocess.run(
-                ["clip"], input=text.encode(), check=True,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            return
+        except Exception:
+            continue
+    raise RuntimeError(_("No clipboard tool found (install one of: wl-copy/xclip/xsel)"))
 
 
-# ── TUI 위젯 ──────────────────────────────────────────────────────────────
+# ── TUI widgets ───────────────────────────────────────────────────────────────
 
 class EntryDetail(Static):
-    """선택된 항목의 상세 정보를 표시하는 위젯."""
+    """Widget to display details of a selected entry."""
 
     DEFAULT_CSS = """
     EntryDetail {
@@ -74,7 +79,7 @@ class EntryDetail(Static):
 
     @staticmethod
     def _esc(text: str) -> str:
-        """Rich 마크업 대괄호를 이스케이프."""
+        """Escape Rich markup brackets."""
         return text.replace("[", "\\[")
 
     def show_entry(self, entry) -> None:
@@ -94,11 +99,11 @@ class EntryDetail(Static):
         self.update("\n".join(lines))
 
     def clear(self) -> None:
-        self.update("[dim]항목을 선택하세요[/]")
+        self.update("[dim]" + _("Select an entry") + "[/]")
 
 
 class KdbxViewer(App):
-    """KDBX 파일을 탐색하는 Textual 앱."""
+    """Textual app for browsing a KDBX file."""
 
     CSS = """
     Screen {
@@ -198,20 +203,20 @@ class KdbxViewer(App):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "종료"),
-        Binding("1", "show_tab('tab-password')", "비밀번호", key_display="1"),
-        Binding("2", "show_tab('tab-ssh')", "SSH 키", key_display="2"),
-        Binding("tab", "switch_pane", "패널 전환"),
-        Binding("shift+tab", "switch_pane_back", "패널 역전환"),
-        Binding("u", "copy_user", "ID 복사"),
-        Binding("p", "copy_pass", "PW 복사"),
-        Binding("h", "copy_host", "Host 복사"),
-        Binding("l", "copy_url", "URL 복사"),
-        Binding("slash", "focus_search", "검색", key_display="/"),
-        Binding("escape", "go_back", "뒤로", show=False),
-        Binding("left", "go_back", "뒤로", show=False),
-        Binding("a", "ssh_add", "에이전트에 추가"),
-        Binding("d", "ssh_delete", "에이전트에서 삭제"),
+        Binding("q", "quit", _("Quit")),
+        Binding("1", "show_tab('tab-password')", _("Password"), key_display="1"),
+        Binding("2", "show_tab('tab-ssh')", _("SSH Keys"), key_display="2"),
+        Binding("tab", "switch_pane", _("Switch Pane")),
+        Binding("shift+tab", "switch_pane_back", _("Switch Pane Back")),
+        Binding("u", "copy_user", _("Copy ID")),
+        Binding("p", "copy_pass", _("Copy PW")),
+        Binding("h", "copy_host", _("Copy Host")),
+        Binding("l", "copy_url", _("Copy URL")),
+        Binding("slash", "focus_search", _("Search"), key_display="/"),
+        Binding("escape", "go_back", _("Back"), show=False),
+        Binding("left", "go_back", _("Back"), show=False),
+        Binding("a", "ssh_add", _("Add to Agent")),
+        Binding("d", "ssh_delete", _("Remove from Agent")),
     ]
 
     def __init__(self, kp: PyKeePass) -> None:
@@ -224,16 +229,16 @@ class KdbxViewer(App):
         self._ssh_keys: list = []
         self._current_ssh_idx: int = -1
         self._agent_map: dict[str, bytes] = {}
-        self._pending_add_idx: int = -1  # passphrase 입력 대기 중인 키 인덱스
+        self._pending_add_idx: int = -1
         self._build_data()
 
     def _build_data(self) -> None:
-        """KDBX 데이터를 그룹/항목 구조로 정리."""
+        """Organise KDBX data into group/entry structure."""
         self.groups.clear()
         self.entries_map.clear()
         root = self.kp.root_group
         for group in sorted(root.subgroups, key=lambda g: g.name or ""):
-            name = group.name or "(이름 없음)"
+            name = group.name or _("(no name)")
             self.groups.append(name)
             self.entries_map[name] = sorted(
                 group.entries, key=lambda e: e.title or ""
@@ -244,7 +249,7 @@ class KdbxViewer(App):
             self.entries_map["(Root)"] = sorted(
                 root_entries, key=lambda e: e.title or ""
             )
-        # SSH 키 (첨부파일) 수집 — SSH 개인키만 필터링
+        # Collect SSH keys (attachments) — filter SSH private keys only
         self._ssh_keys.clear()
         self._agent_map = get_agent_key_map()
         agent_fps = set(self._agent_map.keys())
@@ -255,7 +260,7 @@ class KdbxViewer(App):
             if not is_ssh_private_key(att.binary):
                 continue
             entry = att.entry
-            entry_title = entry.title or "(제목 없음)"
+            entry_title = entry.title or _("(no title)")
             group_name = entry.group.name if entry.group else ""
             fp = get_key_fingerprint(att.binary)
             registered = fp in agent_fps if fp else False
@@ -294,40 +299,42 @@ class KdbxViewer(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="search-bar"):
-            yield Input(placeholder="검색어 입력 후 Enter (Esc: 닫기)", id="search-input")
+            yield Input(placeholder=_("Enter search term and press Enter (Esc: close)"), id="search-input")
         with Horizontal(id="passphrase-bar"):
             yield Input(
-                placeholder="SSH 키 passphrase 입력 (Esc: 취소)",
+                placeholder=_("Enter SSH key passphrase (Esc: cancel)"),
                 id="passphrase-input",
                 password=True,
             )
-        with TabbedContent("비밀번호", "SSH 키"):
-            with TabPane("비밀번호", id="tab-password"):
+        with TabbedContent(_("Passwords"), _("SSH Keys"), initial="tab-password"):
+            with TabPane(_("Passwords"), id="tab-password"):
                 with Horizontal(id="password-view"):
                     with Vertical(id="group-pane"):
-                        yield Label("그룹")
+                        yield Label(_("Groups"))
                         yield ListView(id="group-list")
                     with Vertical(id="entry-pane"):
-                        yield Label("항목")
+                        yield Label(_("Entries"))
                         yield ListView(id="entry-list")
                     with Vertical(id="detail-pane"):
                         yield EntryDetail(id="detail")
-            with TabPane("SSH 키", id="tab-ssh"):
+            with TabPane(_("SSH Keys"), id="tab-ssh"):
                 with Horizontal(id="ssh-view"):
                     with Vertical(id="ssh-list-pane"):
-                        yield Label("SSH 키 목록")
+                        yield Label(_("SSH Key List"))
                         yield ListView(id="ssh-list")
                     with Vertical(id="ssh-detail-pane"):
                         yield Static("", id="ssh-detail")
         yield Footer()
 
     def on_mount(self) -> None:
+        from textual.widgets import Tabs
         self.query_one("#search-bar").display = False
         self.query_one("#passphrase-bar").display = False
+        self.query_one(Tabs).can_focus = False
         detail = self.query_one("#detail", EntryDetail)
         detail.clear()
         self._refresh_group_list()
-        self._refresh_ssh_list()
+        self._refresh_ssh_list(focus=False)
         self.refresh_bindings()
         group_list = self.query_one("#group-list", ListView)
         group_list.focus()
@@ -356,7 +363,7 @@ class KdbxViewer(App):
             group_list = self.query_one("#group-list", ListView)
             group_list.focus()
             if self._search_query:
-                self.notify(f"검색: \"{self._search_query}\"", timeout=2)
+                self.notify(_("Search: \"{query}\"").format(query=self._search_query), timeout=2)
         elif event.input.id == "passphrase-input":
             passphrase = event.value
             event.input.value = ""
@@ -384,7 +391,7 @@ class KdbxViewer(App):
         entries = self._filtered_entries(group_name)
         for i, entry in enumerate(entries):
             key = f"{group_name}::{i}"
-            entry_list.append(ListItem(Label(entry.title or "(제목 없음)", markup=False), name=key))
+            entry_list.append(ListItem(Label(entry.title or _("(no title)"), markup=False), name=key))
         detail = self.query_one("#detail", EntryDetail)
         if entries:
             self._current_entry = entries[0]
@@ -406,7 +413,7 @@ class KdbxViewer(App):
 
     def _copy_field(self, value, label: str) -> None:
         if not value:
-            self.notify(f"{label} 값이 비어 있습니다", severity="warning", timeout=2)
+            self.notify(_("{label} value is empty").format(label=label), severity="warning", timeout=2)
             return
         try:
             copy_to_clipboard(value)
@@ -414,14 +421,14 @@ class KdbxViewer(App):
         except Exception:
             self.notify("clipboard copy failed", severity="error", timeout=2)
 
-    # ── SSH 키 탭 ──────────────────────────────────────────────────────────
+    # ── SSH key tab ───────────────────────────────────────────────────────────
 
-    def _refresh_ssh_list(self, restore_idx: int = -1) -> None:
+    def _refresh_ssh_list(self, restore_idx: int = -1, focus: bool = True) -> None:
         ssh_list = self.query_one("#ssh-list", ListView)
         ssh_list.clear()
         ssh_detail = self.query_one("#ssh-detail", Static)
         if not self._ssh_keys:
-            ssh_detail.update("[dim]등록된 SSH 키가 없습니다[/]")
+            ssh_detail.update("[dim]" + _("No SSH keys registered") + "[/]")
             self._current_ssh_idx = -1
             return
         for i, (_fn, entry_title, group_name, _att, _fp, registered) in enumerate(self._ssh_keys):
@@ -435,7 +442,8 @@ class KdbxViewer(App):
 
         def _restore() -> None:
             ssh_list.index = idx
-            ssh_list.focus()
+            if focus:
+                ssh_list.focus()
 
         self.call_after_refresh(_restore)
 
@@ -444,21 +452,21 @@ class KdbxViewer(App):
             return
         filename, entry_title, group_name, att, fp, registered = self._ssh_keys[idx]
         self._current_ssh_idx = idx
-        status = "[bold green]등록됨[/]" if registered else "[bold red]미등록[/]"
+        status = "[bold green]" + _("Registered") + "[/]" if registered else "[bold red]" + _("Not registered") + "[/]"
         esc_fn = filename.replace("[", "\\[")
         esc_group = group_name.replace("[", "\\[")
         esc_title = entry_title.replace("[", "\\[")
         lines = [
-            f"[bold cyan]파일명:[/]       {esc_fn}",
-            f"[bold cyan]소속 항목:[/]    {esc_group} / {esc_title}",
-            f"[bold cyan]크기:[/]         {len(att.binary)} bytes",
-            f"[bold cyan]Fingerprint:[/]  {fp or '(알 수 없음)'}",
-            f"[bold cyan]Agent 상태:[/]   {status}",
+            f"[bold cyan]{_('Filename:')}[/]       {esc_fn}",
+            f"[bold cyan]{_('Entry:')}[/]    {esc_group} / {esc_title}",
+            f"[bold cyan]{_('Size:')}[/]         {len(att.binary)} bytes",
+            f"[bold cyan]Fingerprint:[/]  {fp or _('(unknown)')}",
+            f"[bold cyan]{_('Agent status:')}[/]   {status}",
         ]
         self.query_one("#ssh-detail", Static).update("\n".join(lines))
 
     def _refresh_ssh_state(self) -> None:
-        """Agent 상태를 재조회하고 목록을 갱신 (선택 위치 유지)."""
+        """Re-query Agent state and refresh list (preserving selection)."""
         saved_idx = self._current_ssh_idx
         self._agent_map = get_agent_key_map()
         agent_fps = set(self._agent_map.keys())
@@ -469,34 +477,45 @@ class KdbxViewer(App):
         self._refresh_ssh_list(restore_idx=saved_idx)
 
     def _do_ssh_add(self, passphrase: str | None = None) -> None:
-        """현재 선택된 SSH 키를 Agent에 추가."""
+        """Add currently selected SSH key to Agent."""
         idx = self._pending_add_idx
         self._pending_add_idx = -1
         if idx < 0 or idx >= len(self._ssh_keys):
             return
         fname, entry_title, group_name, att, _fp, _reg = self._ssh_keys[idx]
-        comment = f"@{fname}"
+        comment = get_key_comment(att.binary, passphrase=passphrase) or f"@{fname}"
         ok, err = agent_add_key(att.binary, passphrase=passphrase, comment=comment)
         if ok:
-            self.notify(f"{group_name}/{entry_title} 키를 Agent에 추가했습니다", timeout=2)
+            fn, et, gn, at, fp, reg = self._ssh_keys[idx]
+            if fp is None:
+                fp = get_key_fingerprint(at.binary, passphrase=passphrase)
+                self._ssh_keys[idx] = (fn, et, gn, at, fp, reg)
+            self.notify(_("Added key {group}/{title} to Agent").format(group=group_name, title=entry_title), timeout=2)
             self._refresh_ssh_state()
         elif err == "passphrase_required":
-            # passphrase가 필요 — 입력 요청
+            if passphrase is None and att.entry.password:
+                self._pending_add_idx = idx
+                self._do_ssh_add(passphrase=att.entry.password)
+                return
             self._pending_add_idx = idx
             self.query_one("#passphrase-bar").display = True
             pp_input = self.query_one("#passphrase-input", Input)
             pp_input.value = ""
             pp_input.focus()
-            self.notify("이 키는 passphrase가 필요합니다", severity="warning", timeout=2)
+            self.notify(_("This key requires a passphrase"), severity="warning", timeout=2)
         else:
-            self.notify(f"Agent 추가 실패: {err}", severity="error", timeout=3)
+            self.notify(_("Failed to add to agent: {err}").format(err=err), severity="error", timeout=3)
 
-    # ── 탭 전환 / 바인딩 ───────────────────────────────────────────────────
+    # ── Tab switching / bindings ──────────────────────────────────────────────
 
     def action_show_tab(self, tab_id: str) -> None:
         self.query_one(TabbedContent).active = tab_id
         if tab_id == "tab-ssh":
             self.query_one("#ssh-list", ListView).focus()
+        elif tab_id == "tab-password":
+            group_list = self.query_one("#group-list", ListView)
+            group_list.index = 0
+            group_list.focus()
         self.refresh_bindings()
 
     def check_action(self, action: str, parameters: tuple) -> bool | None:
@@ -512,7 +531,7 @@ class KdbxViewer(App):
     def _is_ssh_tab_active(self) -> bool:
         return self.query_one(TabbedContent).active == "tab-ssh"
 
-    # ── 액션 핸들러 ────────────────────────────────────────────────────────
+    # ── Action handlers ───────────────────────────────────────────────────────
 
     def action_copy_user(self) -> None:
         if self._current_entry:
@@ -532,7 +551,7 @@ class KdbxViewer(App):
         if self._current_entry and self._current_entry.url:
             self._copy_field(self._current_entry.url, "Host(URL)")
         else:
-            self.notify("Host 정보가 없습니다", severity="warning", timeout=2)
+            self.notify(_("No Host information"), severity="warning", timeout=2)
 
     def action_copy_url(self) -> None:
         if self._current_entry:
@@ -542,11 +561,11 @@ class KdbxViewer(App):
         if not self._is_ssh_tab_active():
             return
         if self._current_ssh_idx < 0 or self._current_ssh_idx >= len(self._ssh_keys):
-            self.notify("추가할 SSH 키가 없습니다", severity="warning", timeout=2)
+            self.notify(_("No SSH key to add"), severity="warning", timeout=2)
             return
         _, _, _, _, _, registered = self._ssh_keys[self._current_ssh_idx]
         if registered:
-            self.notify("이미 Agent에 등록된 키입니다", severity="warning", timeout=2)
+            self.notify(_("Key is already registered in Agent"), severity="warning", timeout=2)
             return
         self._pending_add_idx = self._current_ssh_idx
         self._do_ssh_add()
@@ -555,28 +574,28 @@ class KdbxViewer(App):
         if not self._is_ssh_tab_active():
             return
         if self._current_ssh_idx < 0 or self._current_ssh_idx >= len(self._ssh_keys):
-            self.notify("삭제할 SSH 키가 없습니다", severity="warning", timeout=2)
+            self.notify(_("No SSH key to remove"), severity="warning", timeout=2)
             return
         _fname, entry_title, group_name, _att, fp, registered = self._ssh_keys[self._current_ssh_idx]
         if not registered:
-            self.notify("Agent에 등록되지 않은 키입니다", severity="warning", timeout=2)
+            self.notify(_("Key is not registered in Agent"), severity="warning", timeout=2)
             return
         if not fp or fp not in self._agent_map:
-            self.notify("Agent에서 키를 찾을 수 없습니다", severity="error", timeout=2)
+            self.notify(_("Key not found in Agent"), severity="error", timeout=2)
             return
         blob = self._agent_map[fp]
         if agent_remove_key(blob):
-            self.notify(f"{group_name}/{entry_title} 키를 Agent에서 제거했습니다", timeout=2)
+            self.notify(_("Removed key {group}/{title} from Agent").format(group=group_name, title=entry_title), timeout=2)
             self._refresh_ssh_state()
         else:
-            self.notify("Agent에서 키 제거에 실패했습니다", severity="error", timeout=2)
+            self.notify(_("Failed to remove key from Agent"), severity="error", timeout=2)
 
     def action_focus_search(self) -> None:
         self.query_one("#search-bar").display = True
         self.query_one("#search-input", Input).focus()
 
     def action_go_back(self) -> None:
-        # passphrase 입력 중이면 취소
+        # Cancel if passphrase input is active
         pp_input = self.query_one("#passphrase-input", Input)
         if pp_input.has_focus:
             pp_input.value = ""
@@ -584,7 +603,7 @@ class KdbxViewer(App):
             self._pending_add_idx = -1
             self.query_one("#ssh-list", ListView).focus()
             return
-        # 검색 입력 중이면 닫기
+        # Close search if active
         search_input = self.query_one("#search-input", Input)
         if search_input.has_focus:
             search_input.value = ""
@@ -592,10 +611,10 @@ class KdbxViewer(App):
             if self._search_query:
                 self._search_query = ""
                 self._refresh_group_list()
-                self.notify("검색 초기화", timeout=2)
+                self.notify(_("Search reset"), timeout=2)
             self.query_one("#group-list", ListView).focus()
             return
-        # 항목 목록에서 그룹 목록으로 이동
+        # Move from entry list to group list
         entry_list = self.query_one("#entry-list", ListView)
         if entry_list.has_focus:
             self.query_one("#group-list", ListView).focus()
@@ -613,11 +632,11 @@ class KdbxViewer(App):
 
 
 def _default_kdbx() -> Path:
-    """appdirs 기반 데이터 디렉터리의 database.kdbx 경로를 반환.
+    """Return path to database.kdbx in the appdirs data directory.
 
-    최초 실행 시 패키지에 포함된 파일을 데이터 디렉터리로 복사한다.
+    On first run, copies the bundled file to the data directory.
     """
-    data_dir = Path(appdirs.user_data_dir("megabird_pass"))
+    data_dir = Path(appdirs.user_data_dir("keepass_cli"))
     data_dir.mkdir(parents=True, exist_ok=True)
     dest = data_dir / "database.kdbx"
     if not dest.exists():
@@ -630,14 +649,14 @@ def _default_kdbx() -> Path:
 def main() -> None:
     kdbx_path = Path(sys.argv[1]) if len(sys.argv) > 1 else _default_kdbx()
     if not kdbx_path.exists():
-        print(f"파일을 찾을 수 없습니다: {kdbx_path}")
+        print(_("File not found: {path}").format(path=kdbx_path))
         sys.exit(1)
 
-    master_pw = getpass.getpass("마스터 패스워드: ")
+    master_pw = getpass.getpass(_("Master password: "))
     try:
         kp = PyKeePass(str(kdbx_path), password=master_pw)
     except Exception as e:
-        print(f"KDBX 열기 실패: {e}")
+        print(_("Failed to open KDBX: {err}").format(err=e))
         sys.exit(1)
 
     app = KdbxViewer(kp)
