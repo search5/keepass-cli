@@ -9,9 +9,9 @@ from pathlib import Path
 
 import appdirs
 
-from keepass_cli.i18n import _
+from kpassh.i18n import _
 
-APP_NAME = "keepass_cli"
+APP_NAME = "kpassh"
 DB_FILENAME = "database.kdbx"
 
 
@@ -60,7 +60,7 @@ def cmd_path(_args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="keepass-db",
+        prog="kpassh-db",
         description=_("KDBX database file management"),
     )
     sub = parser.add_subparsers(dest="command", required=True)

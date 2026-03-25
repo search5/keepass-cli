@@ -299,7 +299,7 @@ wheels = [
 ]
 
 [[package]]
-name = "keepass-cli"
+name = "kpassh"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [

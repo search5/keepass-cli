@@ -1,4 +1,4 @@
-"""Internationalization support for keepass_cli using Python gettext."""
+"""Internationalization support for kpassh using Python gettext."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def _setup_translation() -> gettext.NullTranslations:
     lang = _detect_language()
     try:
         return gettext.translation(
-            "keepass_cli",
+            "kpassh",
             localedir=str(_LOCALE_DIR),
             languages=[lang],
         )

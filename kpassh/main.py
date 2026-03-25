@@ -28,8 +28,8 @@ from textual.widgets import (
     TabPane,
 )
 
-from keepass_cli.i18n import _
-from keepass_cli.ssh_agent import (
+from kpassh.i18n import _
+from kpassh.ssh_agent import (
     agent_add_key,
     agent_remove_key,
     get_agent_key_map,
@@ -636,7 +636,7 @@ def _default_kdbx() -> Path:
 
     On first run, copies the bundled file to the data directory.
     """
-    data_dir = Path(appdirs.user_data_dir("keepass_cli"))
+    data_dir = Path(appdirs.user_data_dir("kpassh"))
     data_dir.mkdir(parents=True, exist_ok=True)
     dest = data_dir / "database.kdbx"
     if not dest.exists():

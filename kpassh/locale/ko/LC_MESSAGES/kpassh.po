@@ -1,8 +1,8 @@
-# Korean translations for keepass_cli
+# Korean translations for kpassh
 # Copyright (C) 2024
 msgid ""
 msgstr ""
-"Project-Id-Version: keepass_cli 0.2.0\n"
+"Project-Id-Version: kpassh 0.2.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Language: ko\n"

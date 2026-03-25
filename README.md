@@ -1,4 +1,4 @@
-# keepass-cli
+# kpassh
 
 A terminal TUI for browsing KeePass (KDBX) databases and managing SSH keys via the SSH agent.
 
@@ -28,9 +28,9 @@ uv tool install .
 Before the first run, place your KDBX database in the app data directory:
 
 ```bash
-keepass-db path              # show the expected database path
-keepass-db push              # copy database.kdbx from the current directory
-keepass-db push -i my.kdbx   # specify a custom filename
+kpassh-db path              # show the expected database path
+kpassh-db push              # copy database.kdbx from the current directory
+kpassh-db push -i my.kdbx   # specify a custom filename
 ```
 
 ## Usage
@@ -38,8 +38,8 @@ keepass-db push -i my.kdbx   # specify a custom filename
 ### TUI viewer
 
 ```bash
-keepass-cli                        # use the default database
-keepass-cli /path/to/database.kdbx # specify a file
+kpassh                        # use the default database
+kpassh /path/to/database.kdbx # specify a file
 ```
 
 Enter the master password when prompted, then navigate the TUI.
@@ -81,23 +81,23 @@ The database is stored in the OS-specific user data directory.
 
 | OS | Path |
 |----|------|
-| Linux | `~/.local/share/keepass_cli/database.kdbx` |
-| macOS | `~/Library/Application Support/keepass_cli/database.kdbx` |
-| Windows | `C:\Users\<user>\AppData\Local\keepass_cli\database.kdbx` |
+| Linux | `~/.local/share/kpassh/database.kdbx` |
+| macOS | `~/Library/Application Support/kpassh/database.kdbx` |
+| Windows | `C:\Users\<user>\AppData\Local\kpassh\database.kdbx` |
 
 ```bash
-keepass-db path                    # print the database path
-keepass-db pull                    # copy from app data dir to current directory
-keepass-db pull -o backup.kdbx     # specify output filename
-keepass-db push                    # copy from current directory to app data dir
-keepass-db push -i edited.kdbx     # specify input filename
-keepass-db pull/push -f            # overwrite if destination already exists
+kpassh-db path                    # print the database path
+kpassh-db pull                    # copy from app data dir to current directory
+kpassh-db pull -o backup.kdbx     # specify output filename
+kpassh-db push                    # copy from current directory to app data dir
+kpassh-db push -i edited.kdbx     # specify input filename
+kpassh-db pull/push -f            # overwrite if destination already exists
 ```
 
 ## Project structure
 
 ```
-keepass_cli/
+kpassh/
   __init__.py
   main.py          # TUI viewer (Textual)
   ssh_agent.py     # SSH agent socket protocol, key parsing and fingerprinting
@@ -105,8 +105,8 @@ keepass_cli/
   i18n.py          # Internationalization (gettext, auto-detects OS locale)
   locale/
     ko/LC_MESSAGES/
-      keepass_cli.po   # Korean translations source
-      keepass_cli.mo   # compiled catalog
+      kpassh.po   # Korean translations source
+      kpassh.mo   # compiled catalog
   database.kdbx    # bundled default database
 ```
 

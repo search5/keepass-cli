@@ -1,5 +1,5 @@
 [project]
-name = "keepass_cli"
+name = "kpassh"
 version = "0.2.0"
 description = "KDBX password viewer TUI"
 readme = "README.md"
@@ -13,14 +13,14 @@ dependencies = [
 ]
 
 [project.scripts]
-keepass-cli = "keepass_cli.main:main"
-keepass-db = "keepass_cli.db:main"
+kpassh = "kpassh.main:main"
+kpassh-db = "kpassh.db:main"
 
 [tool.setuptools.package-data]
-keepass_cli = ["database.kdbx", "locale/*/LC_MESSAGES/*.mo"]
+kpassh = ["database.kdbx", "locale/*/LC_MESSAGES/*.mo"]
 
 [tool.setuptools.packages.find]
-include = ["keepass_cli"]
+include = ["kpassh"]
 exclude = []
 
 [build-system]
